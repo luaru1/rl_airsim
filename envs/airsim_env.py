@@ -6,7 +6,7 @@ import math
 from utils.angle_utils import quaternion_to_euler
 
 class AirSimCarEnv:
-    def __init__(self):
+    def __init__(self, env_config):
         # AirSim 클라이언트 연결
         self.client = airsim.CarClient()        # 시뮬레이터와 코드 사이의 연결 객체
         self.client.confirmConnection()         # 통신 가능성 체크
@@ -32,26 +32,32 @@ class AirSimCarEnv:
 
         # 시뮬레이션 Step 정보
         self.step_counter = 0
-        self.max_step = 5000
+        self.max_step = env_config.get('max_step', 5000)
+
+        # 차량 충돌 여부
+        self.collision_detected = False
 
         # 직전 시점에서의 위치
         self.prev_position = None
 
         # 차량의 한계 위치
-        self.max_x_val = 5000
-        self.max_y_val = 5000
+        self.max_x_val = env_config['max_x']
+        self.max_y_val = env_config['max_y']
+
+        # 차량의 목표 속도
+        self.target_speed = env_config['reward_target_speed']
 
         # 차량의 초저속 주행이 얼마나 지속되는지 확인
         self.slow_state_window = []     # 최근 N step동안 초저속 주행을 했는지 여부 저장
-        self.window_n = 50              # 초저속 주행 여부 배열 크기
-        self.low_speed_limit = 1.5      # 초저속 주행 속도 한계
+        self.window_n = env_config['slow_window_size']  # 초저속 주행 여부 배열 크기
+        self.low_speed_limit = env_config['low_speed_limit']    # 초저속 주행 속도 한계
     
     def reset(self):
         # 차량 초기화
         self.client.reset()                     # 시뮬레이터 환경 초기화
         self.client.enableApiControl(True)      # reset에 의해 초기화된 API 제어 권한 활성화
         self.client.armDisarm(True)             # reset에 의해 초기화된 제어 명령 수신 활성화
-        self.client.simSetVehiclePose(self.initial_pose, True)  # 차량을 초기 위치로 이동
+        self.client.simSetVehiclePose(self.initial_pose, ignore_collision=True)  # 차량을 초기 위치로 이동
 
         # 차량 정지 상태 설정
         self.car_controls.throttle = 0.0        # 엑셀 페달 초기화
@@ -63,6 +69,9 @@ class AirSimCarEnv:
 
         # Step 초기화
         self.step_counter = 0
+
+        # 충돌 플래그 초기화
+        self.collision_detected = False
 
         # 직전 시점에서의 위치 초기화
         self.prev_position = self.client.getCarState().kinematics_estimated.position
@@ -82,8 +91,11 @@ class AirSimCarEnv:
         throttle, steering, gear = self.action_space[action_idx]    # Action space에서 행동 선택
         self.car_controls.throttle = throttle
         self.car_controls.steering = steering
-        self.car_controls.is_manual_gear = True
-        self.car_controls.manual_gear = gear
+        if self.car_controls.manual_gear != gear:
+            self.car_controls.is_manual_gear = True
+            self.car_controls.manual_gear = gear
+        else:
+            self.car_controls.is_manual_gear = False
         self.car_controls.brake = 0.0
         self.client.setCarControls(self.car_controls)
 
@@ -104,7 +116,12 @@ class AirSimCarEnv:
             'step': self.step_counter,
             'reward_detail': reward_detail,
             'done_reason': [key for key in ['collision', 'out_of_bounds', 'too_slow', 'timeout'] if done_info[key]]
-        }                               
+        }
+
+        if done:
+            self.car_controls.throttle = 0.0
+            self.car_controls.brake = 1.0
+            self.client.setCarControls(self.car_controls)                               
 
         return obs, total_reward, done, info
     
@@ -123,15 +140,18 @@ class AirSimCarEnv:
         state = self.client.getCarState()       # 현재 차량 상태 반환
         pos = state.kinematics_estimated.position   # 현재 차량의 위치 반환
         speed = state.speed                     # 현재 차량의 속도 반환
-        collision = self.client.simGetCollisionInfo().has_collided  # 충돌 여부 확인
 
         # 충돌 페널티
-        if collision:
+        if self.collision_detected:
             return {'collision_penalty': -100.0}    # 충돌시 큰 페널티 부여
         
         # 속도 보상
-        target_speed = 10.0                     # 목표 속도 10m/s == 36km/h
-        speed_reward = -abs(speed - target_speed) + target_speed    # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
+        speed_reward = -abs(speed - self.target_speed) + self.target_speed    # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
+
+        # 속도 페널티
+        low_speed_penalty = 0.0
+        if speed < 1.0:
+            low_speed_penalty = -2.0
 
         # 이동 거리 보상
         if self.prev_position is not None:
@@ -153,6 +173,7 @@ class AirSimCarEnv:
 
         return {
             'speed_reward': speed_reward,
+            'low_speed_penalty': low_speed_penalty,
             'distance_reward': distance_reward,
             'steering_penalty': steering_penalty,
             'boundary_penalty': boundary_penalty
@@ -160,7 +181,15 @@ class AirSimCarEnv:
     
     def _check_done(self):
         # 충돌 시 종료
-        collision = self.client.simGetCollisionInfo().has_collided
+        collision_info = self.client.simGetCollisionInfo()
+        collision = collision_info.has_collided
+        excluded_keywords = ['landscape']
+        if collision:
+            if not any(k in collision_info.object_name.lower() for k in excluded_keywords):
+                self.collision_detected = True
+            else:
+                self.collision_detected = False
+                collision = False
 
         # 차량 위치가 한계 범위를 벗어나면 종료
         pos = self.client.getCarState().kinematics_estimated.position
@@ -172,16 +201,24 @@ class AirSimCarEnv:
         if len(self.slow_state_window) > self.window_n:
             self.slow_state_window.pop(0)
         
-        if sum(self.slow_state_window) / len(self.slow_state_window) >= 0.9:
-            too_slow = True
-        else:
+        # Step 500 이전에는 저속에 의한 종료 비활성화
+        if self.step_counter < 500:
             too_slow = False
+        else:
+            too_slow =  sum(self.slow_state_window) / len(self.slow_state_window) >= 0.9
 
         # 최대 step에 도달하면 종료
         timeout = self.step_counter >= self.max_step
 
+        # 종료 조건 확인
+        done = collision or out_of_bounds or too_slow or timeout
+
+        # 충돌 플래그 초기화
+        if done:
+            self.collision_detected = False
+
         return {
-            'done': collision or out_of_bounds or too_slow or timeout,
+            'done': done,
             'collision': collision,
             'out_of_bounds': out_of_bounds,
             'too_slow': too_slow,

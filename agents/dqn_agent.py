@@ -1,9 +1,15 @@
 import os
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import random
 from collections import deque
+from pathlib import Path
+
+# scripts -> root directory
+BASE_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'dqn_model.pt')
 
 class QNetwork(nn.Module):
     def __init__(self, state_dim, action_dim):
@@ -63,10 +69,10 @@ class DQNAgent:
         states, actions, rewards, next_states, dones = zip(*batch)
 
         # 각각을 텐서로 변환해 디바이스에 전달
-        states = torch.FloatTensor(states).to(self.device)
+        states = torch.FloatTensor(np.array(states)).to(self.device)
         actions = torch.LongTensor(actions).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
+        next_states = torch.FloatTensor(np.array(next_states)).to(self.device)
         dones = torch.tensor(dones, dtype=torch.bool).unsqueeze(1).to(self.device)
 
         # 현재 Q값 계산
@@ -91,7 +97,7 @@ class DQNAgent:
         # 일정 간격마다 현재 Q-network의 파라미터를 target-network에 복사
         self.target_net.load_state_dict(self.q_net.state_dict())
 
-    def save_model(self, path):
+    def save_model(self, path=DEFAULT_MODEL_PATH):
         # 현재까지 학습된 Q-network, target-network, optimizer, epsilon을 저장
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save({
@@ -101,7 +107,7 @@ class DQNAgent:
             'epsilon': self.epsilon
         }, path)
     
-    def load_model(self, path):
+    def load_model(self, path=DEFAULT_MODEL_PATH):
         # 저장된 모델을 로드
         checkpoint = torch.load(path, map_location=self.device)
         self.q_net.load_state_dict(checkpoint['q_net'])
