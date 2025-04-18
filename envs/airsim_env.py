@@ -4,6 +4,8 @@ import time
 import math
 
 from utils.angle_utils import quaternion_to_euler
+from perception.lidar_processor import LidarProcessor
+from planners.obstacle_avoider import ObstacleAvoider
 
 class AirSimCarEnv:
     def __init__(self, env_config):
@@ -51,6 +53,9 @@ class AirSimCarEnv:
         self.slow_state_window = []     # 최근 N step동안 초저속 주행을 했는지 여부 저장
         self.window_n = env_config['slow_window_size']  # 초저속 주행 여부 배열 크기
         self.low_speed_limit = env_config['low_speed_limit']    # 초저속 주행 속도 한계
+
+        self.lidar_processor = LidarProcessor()
+        self.avoider = ObstacleAvoider()
     
     def reset(self):
         # 차량 초기화
@@ -86,6 +91,12 @@ class AirSimCarEnv:
     def step(self, action_idx):
         # 1개 Step 진행
         self.step_counter += 1
+
+        lidar_data = self.client.getLidarData()
+        lidar_detected = self.lidar_processor.detect_obstacle(lidar_data)
+        safe_action = self.avoider.choose_safe_action(self.action_space, lidar_detected)
+        if safe_action is not None:
+            action_idx = safe_action
 
         # 행동 적용
         throttle, steering, gear = self.action_space[action_idx]    # Action space에서 행동 선택
@@ -151,7 +162,7 @@ class AirSimCarEnv:
         # 속도 페널티
         low_speed_penalty = 0.0
         if speed < 1.0:
-            low_speed_penalty = -2.0
+            low_speed_penalty = -10.0
 
         # 이동 거리 보상
         if self.prev_position is not None:
@@ -161,9 +172,16 @@ class AirSimCarEnv:
             step_distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
         else:
             step_distance = 0.0
-        distance_reward = step_distance * 10.0
+        distance_reward = step_distance
 
         self.prev_position = pos                # 다음 계산을 위해 현재 위치 저장
+
+        # 후진 페널티
+        if self.car_controls.manual_gear == -1:
+            reverse_penalty = -10.0
+        else:
+            reverse_penalty = 0
+
 
         # 급회전 페널티
         steering_penalty = -abs(self.car_controls.steering) * 0.3    # 핸들 회전이 클수록 페널티 부여
@@ -175,6 +193,7 @@ class AirSimCarEnv:
             'speed_reward': speed_reward,
             'low_speed_penalty': low_speed_penalty,
             'distance_reward': distance_reward,
+            'reverse_penalty': reverse_penalty,
             'steering_penalty': steering_penalty,
             'boundary_penalty': boundary_penalty
         }
@@ -183,7 +202,7 @@ class AirSimCarEnv:
         # 충돌 시 종료
         collision_info = self.client.simGetCollisionInfo()
         collision = collision_info.has_collided
-        excluded_keywords = ['landscape']
+        excluded_keywords = []
         if collision:
             if not any(k in collision_info.object_name.lower() for k in excluded_keywords):
                 self.collision_detected = True

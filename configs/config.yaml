@@ -1,6 +1,6 @@
 train:
-  num_episodes: 200
-  max_steps_per_episode: 2000
+  num_episodes: 2000
+  max_steps_per_episode: 10000
   epsilon_start: 1.0
   epsilon_decay: 0.995
   epsilon_min: 0.05
