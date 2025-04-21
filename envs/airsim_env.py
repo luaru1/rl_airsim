@@ -2,9 +2,11 @@ import airsim
 import numpy as np
 import time
 import math
+from PIL import Image
 
 from utils.angle_utils import quaternion_to_euler
 from perception.lidar_processor import LidarProcessor
+from perception.road_detector import RoadDetector
 from planners.obstacle_avoider import ObstacleAvoider
 
 class AirSimCarEnv:
@@ -23,7 +25,7 @@ class AirSimCarEnv:
 
         # Action space (차량이 할 수 있는 행동) 정의
         self.throttle_vals = [0.3, 0.5, 0.7]    # 엑셀 페달을 얼마나 세게 밟을지
-        self.steering_vals = [-0.5, 0.0, 0.5]   # 핸들의 방향을 얼마나 돌릴지
+        self.steering_vals = [-0.8, -0.5, 0.0, 0.5, 0.8]   # 핸들의 방향을 얼마나 돌릴지
         self.gear_vals = [1, -1]                # 전진 기어인지 후진 기어인지
         self.action_space = [
             (t, s, g)
@@ -55,6 +57,7 @@ class AirSimCarEnv:
         self.low_speed_limit = env_config['low_speed_limit']    # 초저속 주행 속도 한계
 
         self.lidar_processor = LidarProcessor()
+        self.road_detector = RoadDetector()
         self.avoider = ObstacleAvoider()
     
     def reset(self):
@@ -116,10 +119,7 @@ class AirSimCarEnv:
         
         reward_detail = self._compute_reward()         # 주행 성과에 따른 보상 계산
         
-        if 'collision_penalty' in reward_detail:
-            total_reward = reward_detail['collision_penalty']
-        else:
-            total_reward = sum(reward_detail.values())
+        total_reward = sum(reward_detail.values())
 
         done_info = self._check_done()          # 종료 조건 계산
         done = done_info['done']
@@ -128,6 +128,10 @@ class AirSimCarEnv:
             'reward_detail': reward_detail,
             'done_reason': [key for key in ['collision', 'out_of_bounds', 'too_slow', 'timeout'] if done_info[key]]
         }
+
+        # 충돌로 인한 종료시 큰 페널티 부여
+        if 'collision' in info['done_reason']:
+            total_reward -= 1000
 
         if done:
             self.car_controls.throttle = 0.0
@@ -151,13 +155,32 @@ class AirSimCarEnv:
         state = self.client.getCarState()       # 현재 차량 상태 반환
         pos = state.kinematics_estimated.position   # 현재 차량의 위치 반환
         speed = state.speed                     # 현재 차량의 속도 반환
-
-        # 충돌 페널티
-        if self.collision_detected:
-            return {'collision_penalty': -100.0}    # 충돌시 큰 페널티 부여
         
+        responses = self.client.simGetImages([
+            airsim.ImageRequest('front_center', airsim.ImageType.Scene, False, False)
+        ], vehicle_name='Car1')
+        lidar_data = self.client.getLidarData(lidar_name='LidarSensor')
+        
+        # 도로 여부에 따른 페널티
+        img1d = np.frombuffer(responses[0].image_data_uint8, dtype=np.uint8)
+        img_rgb = img1d.reshape(responses[0].height, responses[0].width, 3)
+        image = Image.fromarray(img_rgb)
+        if self.road_detector.is_on_road(image):
+            offroad_penalty = 0.0
+        else:
+            offroad_penalty = -5.0
+
+        # 센서 기반 페널티
+        points = np.array(lidar_data.point_cloud, dtype=np.float32).reshape(-1, 3)
+        if self.avoider.get_min_distance(points) < 1.5:
+            sensor_penalty = -100.0
+        elif self.avoider.get_min_distance(points) < 3.0:
+            sensor_penalty = -10.0
+        else:
+            sensor_penalty = 0.0
+
         # 속도 보상
-        speed_reward = -abs(speed - self.target_speed) + self.target_speed    # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
+        speed_reward = (-abs(speed - self.target_speed) + self.target_speed) * 10    # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
 
         # 속도 페널티
         low_speed_penalty = 0.0
@@ -172,7 +195,7 @@ class AirSimCarEnv:
             step_distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
         else:
             step_distance = 0.0
-        distance_reward = step_distance
+        distance_reward = step_distance * 10
 
         self.prev_position = pos                # 다음 계산을 위해 현재 위치 저장
 
@@ -184,12 +207,14 @@ class AirSimCarEnv:
 
 
         # 급회전 페널티
-        steering_penalty = -abs(self.car_controls.steering) * 0.3    # 핸들 회전이 클수록 페널티 부여
+        steering_penalty = -abs(self.car_controls.steering)    # 핸들 회전이 클수록 페널티 부여
 
         # 도로 이탈 페널티(미구현)
         boundary_penalty = 0.0
 
         return {
+            'offroad_penalty': offroad_penalty,
+            'sensor_penalty': sensor_penalty,
             'speed_reward': speed_reward,
             'low_speed_penalty': low_speed_penalty,
             'distance_reward': distance_reward,

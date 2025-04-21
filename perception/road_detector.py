@@ -4,8 +4,8 @@ from PIL import Image
 from torchvision.models.segmentation import deeplabv3_resnet101
 
 class RoadDetector:
-    def __init__(self, device='cuda'):
-        self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
+    def __init__(self):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = deeplabv3_resnet101(pretrained=True).eval().to(self.device)
         self.transform = T.Compose([
             T.Resize((256, 256)),
@@ -13,7 +13,7 @@ class RoadDetector:
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
     
-    def is_road_ahead(self, image: Image.Image) -> bool:
+    def is_on_road(self, image: Image.Image) -> bool:
         input_tensor = self.transform(image).unsqueeze(0).to(self.device)
         with torch.no_grad():
             output = self.model(input_tensor)['out']
