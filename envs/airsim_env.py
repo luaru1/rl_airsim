@@ -22,6 +22,9 @@ class AirSimCarEnv:
 
         # 차량 초기 위치 저장
         self.initial_pose = self.client.simGetVehiclePose()
+        self.init_x = self.initial_pose.position.x_val
+        self.init_y = self.initial_pose.position.y_val
+        self.init_z = self.initial_pose.position.z_val
 
         # Action space (차량이 할 수 있는 행동) 정의
         self.throttle_vals = [0.3, 0.5, 0.7]    # 엑셀 페달을 얼마나 세게 밟을지
@@ -41,8 +44,8 @@ class AirSimCarEnv:
         # 차량 충돌 여부
         self.collision_detected = False
 
-        # 직전 시점에서의 위치
-        self.prev_position = None
+        # 최대 이동 거리
+        self.max_dist = 0
 
         # 차량의 한계 위치
         self.max_x_val = env_config['max_x']
@@ -82,7 +85,7 @@ class AirSimCarEnv:
         self.collision_detected = False
 
         # 직전 시점에서의 위치 초기화
-        self.prev_position = self.client.getCarState().kinematics_estimated.position
+        self.max_dist = 0
 
         # 초저속 주행 여부 배열 초기화
         self.slow_state_window = []
@@ -180,31 +183,31 @@ class AirSimCarEnv:
             sensor_penalty = 0.0
 
         # 속도 보상
-        speed_reward = (-abs(speed - self.target_speed) + self.target_speed) * 10    # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
+        speed_reward = (-abs(speed - self.target_speed) + self.target_speed) * 5   # 목표 속도에 가까울수록 더 큰 보상 부여. target_speed가 최대 보상
 
         # 속도 페널티
         low_speed_penalty = 0.0
-        if speed < 1.0:
+        if speed < 5.0:
             low_speed_penalty = -10.0
 
         # 이동 거리 보상
-        if self.prev_position is not None:
-            dx = pos.x_val - self.prev_position.x_val
-            dy = pos.y_val - self.prev_position.y_val
-            dz = pos.z_val - self.prev_position.z_val
-            step_distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-        else:
-            step_distance = 0.0
-        distance_reward = step_distance * 10
+        dx = pos.x_val - self.init_x
+        dy = pos.y_val - self.init_y
+        dz = pos.z_val - self.init_z
 
-        self.prev_position = pos                # 다음 계산을 위해 현재 위치 저장
+        step_distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+
+        if step_distance > self.max_dist:
+            distance_reward = step_distance - self.max_dist
+            self.max_dist = distance_reward
+        else:
+            distance_reward = 0.0
 
         # 후진 페널티
         if self.car_controls.manual_gear == -1:
             reverse_penalty = -10.0
         else:
             reverse_penalty = 0
-
 
         # 급회전 페널티
         steering_penalty = -abs(self.car_controls.steering)    # 핸들 회전이 클수록 페널티 부여

@@ -5,6 +5,7 @@ import random
 import numpy as np
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
+from collections import defaultdict
 
 # 경로 설정 및 디렉토리 생성
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -64,6 +65,7 @@ for episode in range(1, num_episodes + 1):
     # 환경 및 보상 초기화
     state = env.reset()
     total_reward = 0
+    reward_detail = defaultdict(float)
 
     # 에피소드 내 스텝 진행
     for t in range(max_step_per_episode):
@@ -77,6 +79,8 @@ for episode in range(1, num_episodes + 1):
         # 상태 및 보상 업데이트
         state = next_state
         total_reward += reward
+        for k, v in info['reward_detail'].items():
+            reward_detail[k] += v
         # 조기 종료 조건 충족 시 한 에피소드 종료
         if done:
             break
@@ -97,7 +101,6 @@ for episode in range(1, num_episodes + 1):
     writer.add_scalar("Reward/Total", total_reward, episode)
     writer.add_scalar("Episode/StepCount", info['step'], episode)
 
-    reward_detail = info['reward_detail']
     for k, v in reward_detail.items():
         writer.add_scalar(f"RewardDetail/{k}", v, episode)
 
