@@ -28,7 +28,7 @@ class AirSimCarEnv:
 
         # Action space (차량이 할 수 있는 행동) 정의
         self.throttle_vals = [0.3, 0.5, 0.7]    # 엑셀 페달을 얼마나 세게 밟을지
-        self.steering_vals = [-0.8, -0.5, 0.0, 0.5, 0.8]   # 핸들의 방향을 얼마나 돌릴지
+        self.steering_vals = [-0.8, -0.5, -0.2, 0.0, 0.2, 0.5, 0.8]   # 핸들의 방향을 얼마나 돌릴지
         self.gear_vals = [1, -1]                # 전진 기어인지 후진 기어인지
         self.action_space = [
             (t, s, g)

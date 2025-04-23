@@ -4,7 +4,7 @@
 ### Custom ###
 
 00_*/
-run_sim_windowed.bat
+run_windowed.bat
 
 ### Linux ###
 *~
