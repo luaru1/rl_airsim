@@ -12,6 +12,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'dqn_model.pt')
 
 class QNetwork(nn.Module):
+    # 상태 정보를 받아 Linear layer 통과시켜 행동 선택에 대한 확률 반환
     def __init__(self, state_dim, action_dim):
         super(QNetwork, self).__init__()
         self.fc = nn.Sequential(
